@@ -1,0 +1,2 @@
+# IntegraBoot
+A systemdstub based UKI bootloader for Linux with secure boot support. Requires UEFI, TPM2, and full disk encryption. 
