@@ -3,11 +3,11 @@ import subprocess
 import os
 import sys
 import struct
+import shutil
 
 # Dependencies:
 # python3
 # findmnt
-# find
 # chattr
 # mkinitcpio
 # chmod
@@ -24,6 +24,14 @@ import struct
 # hash-to-efi-sig-list
 # sign-efi-sig-list
 # filefrag
+
+# Pacman Dependencies:
+# linux
+# base
+# python
+# systemd-ukify
+# efibootmgr
+# efitools
 
 # region EOS Script Helpers
 def WriteFile(filePath, contents, binary=False):
@@ -248,6 +256,7 @@ class EventLog(list):
 		return fail_list
 # endregion
 
+# region EFI Vars
 WELL_KNOWN_EFI_VARS = {
 	"BootOrder": { "guid": "8be4df61-93ca-11d2-aa0d-00e098032b8c", "attributes": b"\x07\x00\x00\x00" },
 	"BootCurrent": { "guid": "8be4df61-93ca-11d2-aa0d-00e098032b8c", "attributes": b"\x06\x00\x00\x00" },
@@ -291,8 +300,9 @@ def ReadEfiVar(name):
 		finally:
 			os.close(fd)
 	return buffer
+# endregion
 
-def CreateEslHashList(signatures: list[bytes]):
+def CreateEslHashList(signatures):
 	signature_type = bytes.fromhex("2616c4c14c509240aca941f936934328") # EFI_CERT_SHA256_GUID
 	signature_header_size = 28 # sizeof(EFI_SIGNATURE_LIST)
 	signature_extra_size = 0 # Incorrectly labled as signature_header_size in UEFI spec. Should always be 0
@@ -301,52 +311,89 @@ def CreateEslHashList(signatures: list[bytes]):
 	signature_owner = bytes.fromhex("042c7081cc157345b5d4c3a476b635dc") # EOS_UUID
 	return struct.pack("<16sIII", signature_type, signature_list_size, signature_extra_size, signature_size) + b"".join([ signature_owner + signature for signature in signatures ])
 
-def Main():
-	script_path = os.path.realpath(__file__)
-	script_name = os.path.splitext(os.path.basename(script_path))[0]
-	install_path = f"/usr/bin/{script_name}"
+def FindKernel():
+	if not os.path.exists("/usr/lib/modules/"):
+		return None
+	kernel_paths = []
+	for kernel_dir in os.listdir("/usr/lib/modules/"):
+		kernel_path = os.path.join("/usr/lib/modules/", kernel_dir, "vmlinuz")
+		if os.path.exists(kernel_path):
+			kernel_paths.append(kernel_path)
+	if len(kernel_paths) != 1:
+		return None
+	return kernel_paths[0]
 
-	# Initial setup and scanity checks
+def Main():
+	# Root
 	is_root = os.geteuid() == 0 and os.getegid() == 0
 	if not is_root:
-		PrintError(f"Root is required to run {script_name}. Try sudo {script_name}.")
+		PrintError(f"Root is required to run IntegraBoot. Try sudo integraboot.")
 		return 1
-	if RunCommand("findmnt --noheadings --raw --output source --target /boot", check=False) != 0:
-		PrintError("Nothing is mounted on /boot. Did you forget something?")
+
+	# Kernel
+	kernel_path = FindKernel()
+	if kernel_path == None:
+		PrintError("Unable to locate correct system kernel.")
 		return 1
-	if RunCommand("findmnt --noheadings --raw --output source --target /sys/firmware/efi/efivars/", check=False) != 0:
-		PrintError("Nothing is mounted on /sys/firmware/efi/efivars/. Did you forget something?")
-		return 1
-	kernel_paths = RunCommand("find /usr/lib/modules -maxdepth 2 -mindepth 2 -type f -name vmlinuz", capture=True).splitlines()
-	if len(kernel_paths) == 0:
-		PrintError("Unable to locate system kernel.")
-		return 1
-	if len(kernel_paths) > 1:
-		PrintError("Multiple system kernels found.")
-		return 1
-	kernel_path = kernel_paths[0]
+
+	# Mounts
+	no_boot = False
+	if not os.path.ismount("/boot"):
+		PrintWarning("Nothing is mounted on /boot. Installing to current directory instead.")
+		no_boot = True
+	temp_dir_path = "/tmp/boot_builder"
+	if not os.path.ismount("/tmp"):
+		PrintWarning("Nothing is mounted on /tmp. Using current directory instead.")
+		temp_dir_path = os.path.join(os.path.realpath(os.getcwd()), "boot_builder")
+	no_efi = False
+	if not os.path.ismount("/sys/firmware/efi/efivars"):
+		PrintWarning("Efivars could not be found. Boot order and secure boot cannot be configured.")
+		no_efi = True
+
+	# Dev paths
 	root_dev = RunCommand("findmnt --noheadings --raw --output source --target /", capture=True)
+	root_uuid = RunCommand(f"blkid -o value -s UUID \"{root_dev}\"", capture=True)
+	no_crypt = False
 	crypt_info, crypt_status_code = RunCommand(f"cryptsetup status \"{root_dev}\"", capture=True, check=False)
 	if crypt_status_code != 0:
-		PrintError(f"{script_name} requires an encrypted root partition.")
-		return 1
-	crypt_root_dev = crypt_info[crypt_info.find("device:") + len("device:"):crypt_info.find("\n", crypt_info.find("device:") + len("device:"))].strip()
-	secure_boot = ReadFile("/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c", binary=True)[4:] == b"\x01"
-	setup_mode = ReadFile("/sys/firmware/efi/efivars/SetupMode-8be4df61-93ca-11d2-aa0d-00e098032b8c", binary=True)[4:] == b"\x01"
-	if not secure_boot and not setup_mode:
-		PrintWarning(f"Secure boot is disabled. This feature is required to use {script_name}.")
+		PrintWarning(f"Root partition is not encrypted. This allows trivial bypass of all bootloader security.")
+		no_crypt = True
+	crypt_root_dev = None
+	crypt_root_uuid = None
+	if not no_crypt:
+		crypt_root_dev = crypt_info[crypt_info.find("device:") + len("device:"):crypt_info.find("\n", crypt_info.find("device:") + len("device:"))].strip()
+		crypt_root_uuid = RunCommand(f"blkid -o value -s UUID \"{crypt_root_dev}\"", capture=True)
+	
+	# Efi flags
+	secure_boot_enabled = None
+	in_setup_mode = None
+	if not no_efi:
+		secure_boot_enabled = ReadEfiVar("SecureBoot") == b"\x01"
+		in_setup_mode = ReadEfiVar("SetupMode") == b"\x01"
+	if secure_boot_enabled == False and in_setup_mode == False:
+		PrintWarning(f"Secure boot is disabled in UEFI firmware. Secure boot cannot be configured.")
 
-	# Disable mkinitcpio hooks
-	hooks_dir_path = "/usr/share/libalpm/hooks"
-	for hook_name in os.listdir(hooks_dir_path):
-		if "mkinitcpio" in hook_name and not hook_name.endswith(".disabled"):
-			old_hook_path = os.path.join(hooks_dir_path, hook_name)
-			new_hook_path = os.path.join(hooks_dir_path, hook_name + ".disabled")
-			RunCommand(f"mv \"{old_hook_path}\" \"{new_hook_path}\"")
+	# Other flags
+	mkinitcpio_numlock_installed = os.path.exists("/usr/lib/initcpio/hooks/numlock") and os.path.exists("/usr/lib/initcpio/install/numlock")
+	if not mkinitcpio_numlock_installed:
+		PrintWarning("mkinitcpio-numlock is not installed. Numlock state will be incorrect in initramfs.")
+	has_swapfile = os.path.exists("/swapfile")
+	if not has_swapfile:
+		PrintWarning("/swapfile does not exist. Hibernation will be disabled.")
+	has_zstd = shutil.which("zstd") != None
+	if not has_zstd:
+		PrintWarning("zstd compressor could not be found. Initramfs will be uncompressed.")
+	has_tpm = os.path.exists("/sys/kernel/security/tpm0/binary_bios_measurements")
+	if not has_tpm:
+		PrintWarning("tmp logs cannot be found. Oprom signatures cannot be whitelisted. THIS CAN BRICK YOUR MOTHERBOARD.")
 
-	# Install the boot builder pacman hook
+	# Pacman hooks
+	if os.path.exists("/usr/share/libalpm/hooks/60-mkinitcpio-remove.hook"):
+		os.rename("/usr/share/libalpm/hooks/60-mkinitcpio-remove.hook", "/usr/share/libalpm/hooks/60-mkinitcpio-remove.hook.disabled")
+	if os.path.exists("/usr/share/libalpm/hooks/90-mkinitcpio-install.hook"):
+		os.rename("/usr/share/libalpm/hooks/90-mkinitcpio-install.hook", "/usr/share/libalpm/hooks/90-mkinitcpio-install.hook.disabled")
 	hook_payload = [
-		f"# This file is auto-generated by {script_name}.",
+		f"# This file was auto-generated by IntegraBoot.",
 		f"# Do not modify. All changes will be lost.",
 		f"",
 		f"[Trigger]",
@@ -356,30 +403,34 @@ def Main():
 		f"Target = linux",
 		f"",
 		f"[Action]",
-		f"Description = Running {script_name}...",
+		f"Description = Running IntegraBoot...",
 		f"When = PostTransaction",
-		f"Exec = {install_path}",
+		f"Exec = /usr/bin/integraboot",
 	]
-	hook_path = os.path.join(hooks_dir_path, "boot_builder.hook")
-	WriteFile(hook_path, "".join([ line + "\n" for line in hook_payload ]))
-	RunCommand(f"chmod 644 \"{hook_path}\"")
-	RunCommand(f"chown +0:+0 \"{hook_path}\"")
+	if os.path.realpath(__file__) == "/usr/bin/integraboot":
+		if not os.path.exists("/usr/share/libalpm/hooks/"):
+			PrintError("/usr/share/libalpm/hooks/ does not exist.")
+			return 1
+		WriteFile("/usr/share/libalpm/hooks/boot_builder.hook", "".join([ line + "\n" for line in hook_payload ]))
+		os.chmod("/usr/share/libalpm/hooks/boot_builder.hook", 0o644)
+		os.chown("/usr/share/libalpm/hooks/boot_builder.hook", 0, 0)
+	else:
+		PrintWarning("Script not located in /usr/bin. Skipping Pacman hook installation.")
 
 	# Create boot builder temp folder
-	temp_dir_path = "/tmp/boot_builder"
 	RunCommand(f"rm -rf \"{temp_dir_path}\"")
-	RunCommand(f"mkdir \"{temp_dir_path}\"")
-	RunCommand(f"chmod 700 \"{temp_dir_path}\"")
-	RunCommand(f"chown +0:+0 \"{temp_dir_path}\"")
+	os.mkdir(temp_dir_path, 0o700)
+	os.chmod(temp_dir_path, 0o700)
+	os.chown(temp_dir_path, 0, 0)
 
 	# Generate initramfs
 	print("Making initramfs...")
 	mkinitcpio_conf_path = os.path.join(temp_dir_path, "mkinitcpio.conf")
 	mkinitcpio_conf = [
-		f"MODULES=(fat vfat nls_iso8859_1)",
+		f"MODULES=()",
 		f"BINARIES=()",
 		f"FILES=()",
-		f"HOOKS=(autodetect base udev microcode keyboard keymap numlock block encrypt resume filesystems)",
+		f"HOOKS=(autodetect base udev microcode keyboard keymap {"numlock" if mkinitcpio_numlock_installed else ""} block encrypt resume filesystems)",
 		f"COMPRESSION=\"cat\"",
 		f"COMPRESSION_OPTIONS=()",
 	]
@@ -388,16 +439,19 @@ def Main():
 	RunCommand(f"mkinitcpio -c \"{mkinitcpio_conf_path}\" -g \"{cpio_path}\" -k \"{kernel_path}\"")
 
 	# Compress initramfs
-	print("Compressing initramfs...")
-	cpio_zstd_path = cpio_path + ".zst"
-	RunCommand(f"zstd --rm \"{cpio_path}\" -o \"{cpio_zstd_path}\"")
+	if has_zstd:
+		print("Compressing initramfs...")
+		finally_cpio_path = cpio_path + ".zst"
+		RunCommand(f"zstd --rm \"{cpio_path}\" -o \"{finally_cpio_path}\"")
+	else:
+		finally_cpio_path = cpio_path
 
 	# Generate unified kernel image
 	print("Making unified kernel image...")
-	crypt_root_uuid = RunCommand(f"blkid -o value -s UUID \"{crypt_root_dev}\"", capture=True)
-	root_uuid = RunCommand(f"blkid -o value -s UUID \"{root_dev}\"", capture=True)
-	swap_offset = RunCommand(f"filefrag /swapfile -v", capture=True).splitlines()[3].split(":")[2].partition(".")[0].strip()
-	cmdline = f"resume=UUID={root_uuid} resume_offset={swap_offset} hibernate.compressor=lz4 cryptdevice=UUID={crypt_root_uuid}:crypt_root root=/dev/mapper/crypt_root rw"
+	cmdline = f"cryptdevice=UUID={crypt_root_uuid}:crypt_root root=/dev/mapper/crypt_root rw"
+	if has_swapfile:
+		swap_offset = RunCommand(f"filefrag /swapfile -v", capture=True).splitlines()[3].split(":")[2].partition(".")[0].strip()
+		cmdline = f"resume=UUID={root_uuid} resume_offset={swap_offset} hibernate.compressor=lz4 " + cmdline
 	kernel_info = RunCommand(f"file \"{kernel_path}\"", capture=True)
 	uname = kernel_info[kernel_info.find("version ") + len("version "):]
 	uname = uname[:uname.find(" ")]
@@ -405,7 +459,7 @@ def Main():
 	ukify_conf = [
 		f"[UKI]",
 		f"Linux={kernel_path}",
-		f"Initrd={cpio_zstd_path}",
+		f"Initrd={finally_cpio_path}",
 		f"OSRelease=EOS",
 		f"Uname={uname}",
 		f"Cmdline={cmdline}",
@@ -413,7 +467,7 @@ def Main():
 	WriteFile(ukify_conf_path, "".join([ line + "\n" for line in ukify_conf ]))
 	efi_path = os.path.join(temp_dir_path, "eos.efi")
 	RunCommand(f"ukify -c \"{ukify_conf_path}\" build -o \"{efi_path}\"")
-	RunCommand(f"rm \"{cpio_zstd_path}\"")
+	RunCommand(f"rm \"{finally_cpio_path}\"")
 
 	# Install uki to boot partition
 	RunCommand("rm -rf /boot/*")
@@ -493,15 +547,16 @@ def Main():
 
 	db_esl_path = os.path.join(keys_dir_path, "db.esl")
 	RunCommand(f"hash-to-efi-sig-list \"{efi_path}\" \"{db_esl_path}\"")
-	EV_EFI_BOOT_SERVICES_DRIVER = 0x80000004
-	ALGORITHM_ID_SHA256 = 11
-	evlog_buffer = ReadFile("/sys/kernel/security/tpm0/binary_bios_measurements", binary=True)
-	evlog = EventLog(evlog_buffer, len(evlog_buffer))
-	oprom_signatures = []
-	for event in list(evlog):
-		if event.evtype == EV_EFI_BOOT_SERVICES_DRIVER:
-			oprom_signatures.append(event.digests[ALGORITHM_ID_SHA256].digest)
-	WriteFile(db_esl_path, ReadFile(db_esl_path, binary=True) + CreateEslHashList(oprom_signatures), binary=True)
+	if has_tpm:
+		EV_EFI_BOOT_SERVICES_DRIVER = 0x80000004
+		ALGORITHM_ID_SHA256 = 11
+		evlog_buffer = ReadFile("/sys/kernel/security/tpm0/binary_bios_measurements", binary=True)
+		evlog = EventLog(evlog_buffer, len(evlog_buffer))
+		oprom_signatures = []
+		for event in list(evlog):
+			if event.evtype == EV_EFI_BOOT_SERVICES_DRIVER:
+				oprom_signatures.append(event.digests[ALGORITHM_ID_SHA256].digest)
+		WriteFile(db_esl_path, ReadFile(db_esl_path, binary=True) + CreateEslHashList(oprom_signatures), binary=True)
 
 	dbx_payload = b""
 	dbx_esl_path = os.path.join(keys_dir_path, "dbx.esl")
@@ -511,7 +566,7 @@ def Main():
 	pk_actual = ReadEfiVar("PK")
 	pk_expected = ReadFile(pk_esl_path, binary=True)
 	if pk_actual != pk_expected:
-		if not setup_mode:
+		if not in_setup_mode:
 			PrintError("PK is incorrect but the device is not in setup mode. Please manually switch.")
 			return 1
 		pk_auth_path = os.path.join(temp_dir_path, "pk.auth")
