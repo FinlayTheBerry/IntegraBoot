@@ -4,26 +4,7 @@ import os
 import sys
 import struct
 import shutil
-
-# Dependencies:
-# python3
-# findmnt
-# chattr
-# mkinitcpio
-# chmod
-# chown
-# rm
-# mkdir
-# zstd
-# file
-# ukify
-# cp
-# efibootmgr
-# openssl
-# cert-to-efi-sig-list
-# hash-to-efi-sig-list
-# sign-efi-sig-list
-# filefrag
+import compression.zstd as zstd
 
 # Pacman Dependencies:
 # linux
@@ -46,6 +27,11 @@ def ReadFile(filePath, defaultContents=None, binary=False):
 			return defaultContents
 	with open(filePath, "rb" if binary else "r", encoding=(None if binary else "UTF-8")) as file:
 		return file.read()
+def CreateFile(filePath, contents, mode=0o600, binary=False):
+	filePath = os.path.realpath(os.path.expanduser(filePath))
+	fd = os.open(filePath, os.O_WRONLY | os.O_CREAT, mode)
+	with open(fd, "wb" if binary else "w", encoding=(None if binary else "UTF-8")) as file:
+		file.write(contents)
 def RunCommand(command, echo=False, capture=False, input=None, check=True, env=None):
 	if echo and capture:
 		raise Exception("Command cannot be run with both echo and capture.")
@@ -302,300 +288,313 @@ def ReadEfiVar(name):
 	return buffer
 # endregion
 
-def CreateEslHashList(signatures):
+def CreateEslHashList(signatures, owner_uuid):
 	signature_type = bytes.fromhex("2616c4c14c509240aca941f936934328") # EFI_CERT_SHA256_GUID
 	signature_header_size = 28 # sizeof(EFI_SIGNATURE_LIST)
 	signature_extra_size = 0 # Incorrectly labled as signature_header_size in UEFI spec. Should always be 0
 	signature_size = 16 + 32 # sizeof(EFI_SIGNATURE_DATA) + SHA256_SIZE
 	signature_list_size = signature_header_size + (signature_size * len(signatures)) # SignatureHeaderSize + (SignatureSize * NUM_SIGNATURES)
-	signature_owner = bytes.fromhex("042c7081cc157345b5d4c3a476b635dc") # EOS_UUID
+	signature_owner = uuid.UUID(owner_uuid).bytes
 	return struct.pack("<16sIII", signature_type, signature_list_size, signature_extra_size, signature_size) + b"".join([ signature_owner + signature for signature in signatures ])
-
 def FindKernel():
 	if not os.path.exists("/usr/lib/modules/"):
-		return None
+		return (None, None)
 	kernel_paths = []
 	for kernel_dir in os.listdir("/usr/lib/modules/"):
 		kernel_path = os.path.join("/usr/lib/modules/", kernel_dir, "vmlinuz")
 		if os.path.exists(kernel_path):
-			kernel_paths.append(kernel_path)
+			kernel_paths.append((kernel_path, kernel_dir))
 	if len(kernel_paths) != 1:
-		return None
+		return (None, None)
 	return kernel_paths[0]
 
 def Main():
-	# Root
-	is_root = os.geteuid() == 0 and os.getegid() == 0
-	if not is_root:
+	EPSILONOS_UUID = "81702c04-15cc-4573-b5d4-c3a476b635dc"
+
+	# Scanity Checks
+	DEPENDENCIES = [
+		("findmnt", "base"),
+		("chattr", "base"),
+		("mkinitcpio", "base"),
+		("chmod", "base"),
+		("chown", "base"),
+		("rm", "base"),
+		("mkdir", "base"),
+		("ukify", "systemd-ukify"),
+		("cp", "base"),
+		("efibootmgr", "efibootmgr"),
+		("openssl", "base"),
+		("cert-to-efi-sig-list", "efitools"),
+		("hash-to-efi-sig-list", "efitools"),
+		("sign-efi-sig-list", "efitools"),
+		("filefrag", "base"),
+	]
+	if os.geteuid() != 0 or os.getegid() != 0:
 		PrintError(f"Root is required to run IntegraBoot. Try sudo integraboot.")
 		return 1
-
-	# Kernel
-	kernel_path = FindKernel()
+	if not os.path.ismount("/sys"):
+		PrintError("Nothing is mounted on /sys. IntegraBoot requires SysFs.")
+		return 1
+	kernel_path, uname = FindKernel()
 	if kernel_path == None:
 		PrintError("Unable to locate correct system kernel.")
 		return 1
-
-	# Mounts
-	no_boot = False
-	if not os.path.ismount("/boot"):
-		PrintWarning("Nothing is mounted on /boot. Installing to current directory instead.")
-		no_boot = True
-	temp_dir_path = "/tmp/boot_builder"
-	if not os.path.ismount("/tmp"):
-		PrintWarning("Nothing is mounted on /tmp. Using current directory instead.")
-		temp_dir_path = os.path.join(os.path.realpath(os.getcwd()), "boot_builder")
-	no_efi = False
-	if not os.path.ismount("/sys/firmware/efi/efivars"):
-		PrintWarning("Efivars could not be found. Boot order and secure boot cannot be configured.")
-		no_efi = True
-
-	# Dev paths
-	root_dev = RunCommand("findmnt --noheadings --raw --output source --target /", capture=True)
-	root_uuid = RunCommand(f"blkid -o value -s UUID \"{root_dev}\"", capture=True)
-	no_crypt = False
-	crypt_info, crypt_status_code = RunCommand(f"cryptsetup status \"{root_dev}\"", capture=True, check=False)
-	if crypt_status_code != 0:
-		PrintWarning(f"Root partition is not encrypted. This allows trivial bypass of all bootloader security.")
-		no_crypt = True
-	crypt_root_dev = None
-	crypt_root_uuid = None
-	if not no_crypt:
-		crypt_root_dev = crypt_info[crypt_info.find("device:") + len("device:"):crypt_info.find("\n", crypt_info.find("device:") + len("device:"))].strip()
-		crypt_root_uuid = RunCommand(f"blkid -o value -s UUID \"{crypt_root_dev}\"", capture=True)
-	
-	# Efi flags
-	secure_boot_enabled = None
-	in_setup_mode = None
-	if not no_efi:
-		secure_boot_enabled = ReadEfiVar("SecureBoot") == b"\x01"
-		in_setup_mode = ReadEfiVar("SetupMode") == b"\x01"
-	if secure_boot_enabled == False and in_setup_mode == False:
-		PrintWarning(f"Secure boot is disabled in UEFI firmware. Secure boot cannot be configured.")
-
-	# Other flags
-	mkinitcpio_numlock_installed = os.path.exists("/usr/lib/initcpio/hooks/numlock") and os.path.exists("/usr/lib/initcpio/install/numlock")
-	if not mkinitcpio_numlock_installed:
-		PrintWarning("mkinitcpio-numlock is not installed. Numlock state will be incorrect in initramfs.")
-	has_swapfile = os.path.exists("/swapfile")
-	if not has_swapfile:
-		PrintWarning("/swapfile does not exist. Hibernation will be disabled.")
-	has_zstd = shutil.which("zstd") != None
-	if not has_zstd:
-		PrintWarning("zstd compressor could not be found. Initramfs will be uncompressed.")
-	has_tpm = os.path.exists("/sys/kernel/security/tpm0/binary_bios_measurements")
-	if not has_tpm:
-		PrintWarning("tmp logs cannot be found. Oprom signatures cannot be whitelisted. THIS CAN BRICK YOUR MOTHERBOARD.")
+	for dep, pac in DEPENDENCIES:
+		if shutil.which(dep) == None:
+			PrintError(f"Unable to locate required dependency {dep}. Try pacman -Syu {pac}.")
+			return 1
 
 	# Pacman hooks
 	if os.path.exists("/usr/share/libalpm/hooks/60-mkinitcpio-remove.hook"):
 		os.rename("/usr/share/libalpm/hooks/60-mkinitcpio-remove.hook", "/usr/share/libalpm/hooks/60-mkinitcpio-remove.hook.disabled")
 	if os.path.exists("/usr/share/libalpm/hooks/90-mkinitcpio-install.hook"):
 		os.rename("/usr/share/libalpm/hooks/90-mkinitcpio-install.hook", "/usr/share/libalpm/hooks/90-mkinitcpio-install.hook.disabled")
-	hook_payload = [
-		f"# This file was auto-generated by IntegraBoot.",
-		f"# Do not modify. All changes will be lost.",
-		f"",
-		f"[Trigger]",
-		f"Operation = Install",
-		f"Operation = Upgrade",
-		f"Type = Package",
-		f"Target = linux",
-		f"",
-		f"[Action]",
-		f"Description = Running IntegraBoot...",
-		f"When = PostTransaction",
-		f"Exec = /usr/bin/integraboot",
-	]
+	hook_payload = "".join([ line + "\n" for line in [
+		"# This file was auto-generated by IntegraBoot.",
+		"# Do not modify. All changes will be lost.",
+		"",
+		"[Trigger]",
+		"Operation = Install",
+		"Operation = Upgrade",
+		"Type = Package",
+		"Target = linux",
+		"",
+		"[Action]",
+		"Description = Running IntegraBoot...",
+		"When = PostTransaction",
+		"Exec = /usr/bin/integraboot",
+	]])
 	if os.path.realpath(__file__) == "/usr/bin/integraboot":
 		if not os.path.exists("/usr/share/libalpm/hooks/"):
 			PrintError("/usr/share/libalpm/hooks/ does not exist.")
 			return 1
-		WriteFile("/usr/share/libalpm/hooks/boot_builder.hook", "".join([ line + "\n" for line in hook_payload ]))
-		os.chmod("/usr/share/libalpm/hooks/boot_builder.hook", 0o644)
-		os.chown("/usr/share/libalpm/hooks/boot_builder.hook", 0, 0)
+		CreateFile("/usr/share/libalpm/hooks/integraboot.hook", hook_payload, mode=0o644)
 	else:
 		PrintWarning("Script not located in /usr/bin. Skipping Pacman hook installation.")
 
-	# Create boot builder temp folder
-	RunCommand(f"rm -rf \"{temp_dir_path}\"")
+	# Create IntegraBoot temp folder
+	if not os.path.ismount("/tmp"):
+		PrintWarning("Nothing is mounted on /tmp. Using current directory instead.")
+		temp_dir_path = os.path.join(os.path.realpath(os.getcwd()), "integraboot_tmp")
+	else:
+		temp_dir_path = "/tmp/integraboot_tmp"
+	shutil.rmtree(temp_dir_path, ignore_errors=True)
 	os.mkdir(temp_dir_path, 0o700)
-	os.chmod(temp_dir_path, 0o700)
-	os.chown(temp_dir_path, 0, 0)
 
-	# Generate initramfs
-	print("Making initramfs...")
+	# Generate InitRamFs
+	print("Making InitRamFs...")
+	mkinitcpio_numlock_installed = os.path.exists("/usr/lib/initcpio/hooks/numlock") and os.path.exists("/usr/lib/initcpio/install/numlock")
+	if not mkinitcpio_numlock_installed:
+		PrintWarning("mkinitcpio-numlock is not installed. Numlock state will be incorrect in initramfs.")
 	mkinitcpio_conf_path = os.path.join(temp_dir_path, "mkinitcpio.conf")
-	mkinitcpio_conf = [
+	mkinitcpio_conf = "".join([ line + "\n" for line in [
 		f"MODULES=()",
 		f"BINARIES=()",
 		f"FILES=()",
 		f"HOOKS=(autodetect base udev microcode keyboard keymap {"numlock" if mkinitcpio_numlock_installed else ""} block encrypt resume filesystems)",
 		f"COMPRESSION=\"cat\"",
 		f"COMPRESSION_OPTIONS=()",
-	]
-	WriteFile(mkinitcpio_conf_path, "".join([ line + "\n" for line in mkinitcpio_conf ]))
-	cpio_path = os.path.join(temp_dir_path, "initramfs.cpio")
+	]])
+	CreateFile(mkinitcpio_conf_path, mkinitcpio_conf, mode=0o600)
+	cpio_path = os.path.join(temp_dir_path, "initramfs.cpio.zst")
 	RunCommand(f"mkinitcpio -c \"{mkinitcpio_conf_path}\" -g \"{cpio_path}\" -k \"{kernel_path}\"")
+	WriteFile(cpio_path, zstd.compress(ReadFile(cpio_path, binary=True)), binary=True)
+	os.unlink(mkinitcpio_conf_path)
 
-	# Compress initramfs
-	if has_zstd:
-		print("Compressing initramfs...")
-		finally_cpio_path = cpio_path + ".zst"
-		RunCommand(f"zstd --rm \"{cpio_path}\" -o \"{finally_cpio_path}\"")
+	# Generate UKI
+	print("Making UKI...")
+	root_dev = RunCommand("findmnt --noheadings --raw --output source --target /", capture=True)
+	root_uuid = RunCommand(f"blkid -o value -s UUID \"{root_dev}\"", capture=True)
+	crypt_info, crypt_status_code = RunCommand(f"cryptsetup status \"{root_dev}\"", capture=True, check=False)
+	if crypt_status_code != 0:
+		PrintWarning(f"Root partition is not encrypted. This allows trivial bypass of all bootloader security.")
+		cmdline = f"root=UUID={root_uuid} rw"
 	else:
-		finally_cpio_path = cpio_path
-
-	# Generate unified kernel image
-	print("Making unified kernel image...")
-	cmdline = f"cryptdevice=UUID={crypt_root_uuid}:crypt_root root=/dev/mapper/crypt_root rw"
-	if has_swapfile:
+		crypt_root_dev = crypt_info[crypt_info.find("device:") + len("device:"):crypt_info.find("\n", crypt_info.find("device:") + len("device:"))].strip()
+		crypt_root_uuid = RunCommand(f"blkid -o value -s UUID \"{crypt_root_dev}\"", capture=True)
+		cmdline = f"cryptdevice=UUID={crypt_root_uuid}:crypt_root root=/dev/mapper/crypt_root rw"
+	has_swapfile = os.path.exists("/swapfile")
+	if not has_swapfile:
+		PrintWarning("/swapfile does not exist. Hibernation will be disabled.")
+	else:
 		swap_offset = RunCommand(f"filefrag /swapfile -v", capture=True).splitlines()[3].split(":")[2].partition(".")[0].strip()
-		cmdline = f"resume=UUID={root_uuid} resume_offset={swap_offset} hibernate.compressor=lz4 " + cmdline
-	kernel_info = RunCommand(f"file \"{kernel_path}\"", capture=True)
-	uname = kernel_info[kernel_info.find("version ") + len("version "):]
-	uname = uname[:uname.find(" ")]
+		cmdline = " ".join([ f"resume=UUID={root_uuid} resume_offset={swap_offset} hibernate.compressor=lz4", cmdline ])
 	ukify_conf_path = os.path.join(temp_dir_path, "ukify.conf")
-	ukify_conf = [
+	ukify_conf = "".join([ line + "\n" for line in [
 		f"[UKI]",
 		f"Linux={kernel_path}",
-		f"Initrd={finally_cpio_path}",
-		f"OSRelease=EOS",
+		f"Initrd={cpio_path}",
+		f"OSRelease=EpsilonOS",
 		f"Uname={uname}",
 		f"Cmdline={cmdline}",
-	]
-	WriteFile(ukify_conf_path, "".join([ line + "\n" for line in ukify_conf ]))
-	efi_path = os.path.join(temp_dir_path, "eos.efi")
+	]])
+	CreateFile(ukify_conf_path, ukify_conf, mode=0o600)
+	efi_path = os.path.join(temp_dir_path, "epsilonos.efi")
 	RunCommand(f"ukify -c \"{ukify_conf_path}\" build -o \"{efi_path}\"")
-	RunCommand(f"rm \"{finally_cpio_path}\"")
+	os.unlink(cpio_path)
+	os.unlink(ukify_conf_path)
 
 	# Install uki to boot partition
-	RunCommand("rm -rf /boot/*")
-	RunCommand("chmod 700 /boot")
-	RunCommand("chown +0:+0 /boot")
-	RunCommand("mkdir /boot/EFI")
-	RunCommand("chmod 700 /boot/EFI")
-	RunCommand("chown +0:+0 /boot/EFI")
-	RunCommand("mkdir /boot/EFI/BOOT")
-	RunCommand("chmod 700 /boot/EFI/BOOT")
-	RunCommand("chown +0:+0 /boot/EFI/BOOT")
-	RunCommand(f"cp \"{efi_path}\" /boot/EFI/BOOT/BOOTX64.EFI")
-	RunCommand("chmod 700 /boot/EFI/BOOT/BOOTX64.EFI")
-	RunCommand("chown +0:+0 /boot/EFI/BOOT/BOOTX64.EFI")
+	no_boot = not os.path.ismount("/boot")
+	if no_boot:
+		PrintWarning("Nothing is mounted on /boot. Installing to current directory instead.")
+		install_path = os.path.join(os.path.realpath(os.getcwd()), "EpsilonOS.EFI")
+	else:
+		install_path = "/boot/EFI/BOOT/BOOTX64.EFI"
+		# TODO Maybe there is a less invastive way to install without deleting existing bootloaders.
+		for sub_name in os.listdir("/boot"):
+			sub_path = os.path.join("/boot", sub_name)
+			if os.path.isdir(sub_path):
+				shutil.rmtree(sub_path)
+			else:
+				os.remove(sub_path)
+		os.chmod("/boot", 0o700)
+		os.chown("/boot", 0, 0)
+		os.mkdir("/boot/EFI", 0o700)
+		os.mkdir("/boot/EFI/BOOT", 0o700)
+	CreateFile(install_path, ReadFile(efi_path, binary=True), mode=0o700, binary=True)
+	os.unlink(efi_path)
 
-	# Setup efi boot entries as needed
-	for line in RunCommand("efibootmgr", capture=True).splitlines():
-		if not len(line) > 8:
-			continue
-		if not line.startswith("Boot"):
-			continue
-		if not line[8:].startswith(" ") and not line[8:].startswith("* "):
-			continue
-		boot_num = line[4:8]
-		if not all([ c in "0123456789" for c in boot_num ]):
-			continue
-		RunCommand(f"efibootmgr --delete-bootnum --bootnum {boot_num}")
-	boot_dev = RunCommand("findmnt --noheadings --raw --output source --target /boot", capture=True)
-	boot_disk = os.path.join("/dev", RunCommand(f"lsblk --noheadings --raw --output PKNAME \"{boot_dev}\"", capture=True))
-	boot_part = RunCommand(f"lsblk --noheadings --raw --output PARTN \"{boot_dev}\"", capture=True)
-	RunCommand(f"efibootmgr --create-only --disk \"{boot_disk}\" --part \"{boot_part}\" --loader \"\\EFI\\BOOT\\BOOTX64.EFI\" --label \"EOS\"")
-	for line in RunCommand("efibootmgr", capture=True).splitlines():
-		if not len(line) > 8:
-			continue
-		if not line.startswith("Boot"):
-			continue
-		if not line[8:].startswith(" ") and not line[8:].startswith("* "):
-			continue
-		boot_num = line[4:8]
-		if not all([ c in "0123456789" for c in boot_num ]):
-			continue
-		RunCommand(f"efibootmgr --bootorder {boot_num}")
-		break
-	RunCommand("efibootmgr --timeout 0", check=False)
-	RunCommand("efibootmgr --delete-bootnext", check=False)
-
-	# Generate efi certs, keys, and values for efi vars
-	eos_uuid = "81702c04-15cc-4573-b5d4-c3a476b635dc"
-	openssl_conf = "x509_extensions = noext\n[noext]\nsubjectKeyIdentifier=none"
+	# Generate /var/lib/efi_keys
+	openssl_conf = "".join([ line + "\n" for line in [
+		f"[ req ]",
+		f"x509_extensions = noext",
+		f"",
+		f"[ noext ]"
+		f"subjectKeyIdentifier = none",
+	] ])
 	openssl_conf_path = os.path.join(temp_dir_path, "openssl.conf")
-	WriteFile(openssl_conf_path, openssl_conf)
-	keys_dir_path = "/etc/efi_keys"
-	if not os.path.exists(keys_dir_path):
-		RunCommand(f"mkdir \"{keys_dir_path}\"")
-		RunCommand(f"chmod 700 \"{keys_dir_path}\"")
-		RunCommand(f"chown +0:+0 \"{keys_dir_path}\"")
+	CreateFile(openssl_conf_path, openssl_conf, mode=0o600)
+	if not os.path.exists("/var"):
+		os.mkdir("/var", mode=0o755)
+	if not os.path.exists("/var/lib"):
+		os.mkdir("/var/lib", mode=0o755)
+	if not os.path.exists("/var/lib/efi_keys"):
+		os.mkdir("/var/lib/efi_keys", mode=0o700)
+	if not os.stat("/var/lib/efi_keys").st_mode == 0o40700:
+		PrintError("Perms on /var/lib/efi_keys have been tampered. Aborting!")
+		return 1
+	if not os.path.exists("/var/lib/efi_keys/PK.key"):
+		RunCommand(f"openssl genrsa -out /var/lib/efi_keys/PK.key 4096")
+	if not os.stat("/var/lib/efi_keys/PK.key").st_mode == 0o100600:
+		PrintError("Perms on /var/lib/efi_keys/PK.key have been tampered. Aborting!")
+		return 1
+	if not os.path.exists("/var/lib/efi_keys/PK.crt"):
+		RunCommand(f"openssl req -new -x509 -key /var/lib/efi_keys/PK.key -out /var/lib/efi_keys/PK.crt -days 3650 -sha256 -subj \"/CN=EpsilonOS Autogenerated PK\" -config \"{openssl_conf_path}\"")
+		os.chmod("/var/lib/efi_keys/PK.crt", 0o600)
+	if not os.stat("/var/lib/efi_keys/PK.crt").st_mode == 0o100600:
+		PrintError("Perms on /var/lib/efi_keys/PK.crt have been tampered. Aborting!")
+		return 1
+	if not os.path.exists("/var/lib/efi_keys/KEK.key"):
+		RunCommand(f"openssl genrsa -out /var/lib/efi_keys/KEK.key 4096")
+	if not os.stat("/var/lib/efi_keys/KEK.key").st_mode == 0o100600:
+		PrintError("Perms on /var/lib/efi_keys/KEK.key have been tampered. Aborting!")
+		return 1	
+	if not os.path.exists("/var/lib/efi_keys/KEK.crt"):
+		RunCommand(f"openssl req -new -x509 -key /var/lib/efi_keys/KEK.key -out /var/lib/efi_keys/KEK.crt -days 3650 -sha256 -subj \"/CN=EpsilonOS Autogenerated KEK\" -config \"{openssl_conf_path}\"")
+		os.chmod("/var/lib/efi_keys/KEK.crt", 0o600)
+	if not os.stat("/var/lib/efi_keys/KEK.crt").st_mode == 0o100600:
+		PrintError("Perms on /var/lib/efi_keys/KEK.crt have been tampered. Aborting!")
+		return 1
 
-	pk_key_path = os.path.join(keys_dir_path, "PK.key")
-	if not os.path.exists(pk_key_path):
-		RunCommand(f"openssl genrsa -out \"{pk_key_path}\" 4096")
-	pk_cert_path = os.path.join(keys_dir_path, "PK.crt")
-	if not os.path.exists(pk_cert_path):
-		RunCommand(f"openssl req -new -x509 -key \"{pk_key_path}\" -out \"{pk_cert_path}\" -days 3650 -sha256 -subj \"/CN=EOS Autogenerated PK\" -config \"{openssl_conf_path}\"")
-	pk_esl_path = os.path.join(keys_dir_path, "PK.esl")
-	if not os.path.exists(pk_esl_path):
-		RunCommand(f"cert-to-efi-sig-list -g \"{eos_uuid}\" \"{pk_cert_path}\" \"{pk_esl_path}\"")
+	# Set efi boot entries
+	no_efi = not os.path.ismount("/sys/firmware/efi/efivars")
+	if no_efi:
+		PrintWarning("Nothing is mounted at /sys/firmware/efi/efivars. Unable to manage boot order.")
+	else:
+		for line in RunCommand("efibootmgr", capture=True).splitlines():
+			if not len(line) > 8:
+				continue
+			if not line.startswith("Boot"):
+				continue
+			if not line[8:].startswith(" ") and not line[8:].startswith("* "):
+				continue
+			boot_num = line[4:8]
+			if not all([ c in "0123456789" for c in boot_num ]):
+				continue
+			RunCommand(f"efibootmgr --delete-bootnum --bootnum {boot_num}")
+		boot_dev = RunCommand("findmnt --noheadings --raw --output source --target /boot", capture=True)
+		boot_partnum = ReadFile(os.path.join("/sys/class/block/", os.path.basename(boot_dev), "partition")).strip()
+		boot_disk = os.path.join("/dev", os.path.basename(os.path.dirname(os.path.realpath(os.path.join("/sys/class/block/", os.path.basename(boot_dev))))))
+		RunCommand(f"efibootmgr --create-only --disk \"{boot_disk}\" --part \"{boot_partnum}\" --loader \"\\EFI\\BOOT\\BOOTX64.EFI\" --label \"EpsilonOS\"")
+		for line in RunCommand("efibootmgr", capture=True).splitlines():
+			if not len(line) > 8:
+				continue
+			if not line.startswith("Boot"):
+				continue
+			if not line[8:].startswith(" ") and not line[8:].startswith("* "):
+				continue
+			boot_num = line[4:8]
+			if not all([ c in "0123456789" for c in boot_num ]):
+				continue
+			RunCommand(f"efibootmgr --bootorder {boot_num}")
+			break
+		RunCommand("efibootmgr --timeout 0", check=False)
+		RunCommand("efibootmgr --delete-bootnext", check=False)
 
-	kek_key_path = os.path.join(keys_dir_path, "KEK.key")
-	if not os.path.exists(kek_key_path):
-		RunCommand(f"openssl genrsa -out \"{kek_key_path}\" 4096")
-	kek_cert_path = os.path.join(keys_dir_path, "KEK.crt")
-	if not os.path.exists(kek_cert_path):
-		RunCommand(f"openssl req -new -x509 -key \"{kek_key_path}\" -out \"{kek_cert_path}\" -days 3650 -sha256 -subj \"/CN=EOS Autogenerated KEK\" -config \"{openssl_conf_path}\"")
-	kek_esl_path = os.path.join(keys_dir_path, "KEK.esl")
-	if not os.path.exists(kek_esl_path):
-		RunCommand(f"cert-to-efi-sig-list -g \"{eos_uuid}\" \"{kek_cert_path}\" \"{kek_esl_path}\"")
+	if no_efi:
+		PrintWarning("Nothing is mounted at /sys/firmware/efi/efivars. Unable to manage secure boot.")
+	else:
+		secure_boot_enabled = ReadEfiVar("SecureBoot") == b"\x01"
+		in_setup_mode = ReadEfiVar("SetupMode") == b"\x01"
+		if not secure_boot_enabled and not in_setup_mode:
+			PrintWarning(f"Secure boot is disabled in UEFI firmware. Unable to manage secure boot.")
+		else:
+			pk_esl_path = os.path.join(temp_dir_path, "PK.esl")
+			RunCommand(f"cert-to-efi-sig-list -g \"{EPSILONOS_UUID}\" /var/lib/efi_keys/PK.crt \"{pk_esl_path}\"")
+			kek_esl_path = os.path.join(temp_dir_path, "KEK.esl")
+			RunCommand(f"cert-to-efi-sig-list -g \"{EPSILONOS_UUID}\" /var/lib/efi_keys/KEK.crt \"{kek_esl_path}\"")
+			db_esl_path = os.path.join(temp_dir_path, "db.esl")
+			RunCommand(f"hash-to-efi-sig-list \"{install_path}\" \"{db_esl_path}\"")
+			has_tpm = os.path.exists("/sys/kernel/security/tpm0/binary_bios_measurements")
+			if not has_tpm:
+				PrintWarning("/sys/kernel/security/tpm0/binary_bios_measurements does not exist. OpRom signatures cannot be whitelisted. THIS CAN BRICK YOUR MOTHERBOARD.")
+			else:
+				EV_EFI_BOOT_SERVICES_DRIVER = 0x80000004
+				ALGORITHM_ID_SHA256 = 11
+				evlog_buffer = ReadFile("/sys/kernel/security/tpm0/binary_bios_measurements", binary=True)
+				evlog = EventLog(evlog_buffer, len(evlog_buffer))
+				oprom_signatures = []
+				for event in list(evlog):
+					if event.evtype == EV_EFI_BOOT_SERVICES_DRIVER:
+						oprom_signatures.append(event.digests[ALGORITHM_ID_SHA256].digest)
+				WriteFile(db_esl_path, ReadFile(db_esl_path, binary=True) + CreateEslHashList(oprom_signatures, EPSILONOS_UUID), binary=True)
+			dbx_esl_path = os.path.join(temp_dir_path, "dbx.esl")
+			WriteFile(dbx_esl_path, b"", binary=True)
 
-	db_esl_path = os.path.join(keys_dir_path, "db.esl")
-	RunCommand(f"hash-to-efi-sig-list \"{efi_path}\" \"{db_esl_path}\"")
-	if has_tpm:
-		EV_EFI_BOOT_SERVICES_DRIVER = 0x80000004
-		ALGORITHM_ID_SHA256 = 11
-		evlog_buffer = ReadFile("/sys/kernel/security/tpm0/binary_bios_measurements", binary=True)
-		evlog = EventLog(evlog_buffer, len(evlog_buffer))
-		oprom_signatures = []
-		for event in list(evlog):
-			if event.evtype == EV_EFI_BOOT_SERVICES_DRIVER:
-				oprom_signatures.append(event.digests[ALGORITHM_ID_SHA256].digest)
-		WriteFile(db_esl_path, ReadFile(db_esl_path, binary=True) + CreateEslHashList(oprom_signatures), binary=True)
-
-	dbx_payload = b""
-	dbx_esl_path = os.path.join(keys_dir_path, "dbx.esl")
-	WriteFile(dbx_esl_path, dbx_payload, binary=True)
-
-	# Set efi var values if they are incorrect
-	pk_actual = ReadEfiVar("PK")
-	pk_expected = ReadFile(pk_esl_path, binary=True)
-	if pk_actual != pk_expected:
-		if not in_setup_mode:
-			PrintError("PK is incorrect but the device is not in setup mode. Please manually switch.")
-			return 1
-		pk_auth_path = os.path.join(temp_dir_path, "pk.auth")
-		RunCommand(f"sign-efi-sig-list -g \"{eos_uuid}\" -c \"{pk_cert_path}\" -k \"{pk_key_path}\" PK \"{pk_esl_path}\" \"{pk_auth_path}\"")
-		WriteEfiVar("PK", ReadFile(pk_auth_path, binary=True))
-
-	kek_actual = ReadEfiVar("KEK")
-	kek_expected = ReadFile(kek_esl_path, binary=True)
-	if kek_actual != kek_expected:
-		kek_auth_path = os.path.join(temp_dir_path, "kek.auth")
-		RunCommand(f"sign-efi-sig-list -g \"{eos_uuid}\" -c \"{pk_cert_path}\" -k \"{pk_key_path}\" KEK \"{kek_esl_path}\" \"{kek_auth_path}\"")
-		WriteEfiVar("KEK", ReadFile(kek_auth_path, binary=True))
-	
-	db_actual = ReadEfiVar("db")
-	db_expected = ReadFile(db_esl_path, binary=True)
-	if db_actual != db_expected:
-		db_auth_path = os.path.join(temp_dir_path, "db.auth")
-		RunCommand(f"sign-efi-sig-list -g \"{eos_uuid}\" -c \"{kek_cert_path}\" -k \"{kek_key_path}\" db \"{db_esl_path}\" \"{db_auth_path}\"")
-		WriteEfiVar("db", ReadFile(db_auth_path, binary=True))
-
-	dbx_actual = ReadEfiVar("dbx")
-	dbx_expected = ReadFile(dbx_esl_path, binary=True)
-	if dbx_actual != dbx_expected:
-		dbx_auth_path = os.path.join(temp_dir_path, "dbx.auth")
-		RunCommand(f"sign-efi-sig-list -g \"{eos_uuid}\" -c \"{kek_cert_path}\" -k \"{kek_key_path}\" dbx \"{dbx_esl_path}\" \"{dbx_auth_path}\"")
-		WriteEfiVar("dbx", ReadFile(dbx_auth_path, binary=True))
+			provisioning_needed = False
+			pk_actual = ReadEfiVar("PK")
+			pk_expected = ReadFile(pk_esl_path, binary=True)
+			if pk_actual != pk_expected:
+				if not in_setup_mode:
+					PrintWarning("Provisioning needed but the device is not in setup mode. Please clear PK in UEFI BIOS.")
+					provisioning_needed = True
+				else:
+					pk_auth_path = os.path.join(temp_dir_path, "pk.auth")
+					RunCommand(f"sign-efi-sig-list -g \"{EPSILONOS_UUID}\" -c /var/lib/efi_keys/PK.crt -k /var/lib/efi_keys/PK.key PK \"{pk_esl_path}\" \"{pk_auth_path}\"")
+					WriteEfiVar("PK", ReadFile(pk_auth_path, binary=True))
+			if not provisioning_needed:
+				kek_actual = ReadEfiVar("KEK")
+				kek_expected = ReadFile(kek_esl_path, binary=True)
+				if kek_actual != kek_expected:
+					kek_auth_path = os.path.join(temp_dir_path, "kek.auth")
+					RunCommand(f"sign-efi-sig-list -g \"{EPSILONOS_UUID}\" -c /var/lib/efi_keys/PK.crt -k /var/lib/efi_keys/PK.key KEK \"{kek_esl_path}\" \"{kek_auth_path}\"")
+					WriteEfiVar("KEK", ReadFile(kek_auth_path, binary=True))
+				db_actual = ReadEfiVar("db")
+				db_expected = ReadFile(db_esl_path, binary=True)
+				if db_actual != db_expected:
+					db_auth_path = os.path.join(temp_dir_path, "db.auth")
+					RunCommand(f"sign-efi-sig-list -g \"{EPSILONOS_UUID}\" -c /var/lib/efi_keys/KEK.crt -k /var/lib/efi_keys/KEK.key db \"{db_esl_path}\" \"{db_auth_path}\"")
+					WriteEfiVar("db", ReadFile(db_auth_path, binary=True))
+				dbx_actual = ReadEfiVar("dbx")
+				dbx_expected = ReadFile(dbx_esl_path, binary=True)
+				if dbx_actual != dbx_expected:
+					dbx_auth_path = os.path.join(temp_dir_path, "dbx.auth")
+					RunCommand(f"sign-efi-sig-list -g \"{EPSILONOS_UUID}\" -c /var/lib/efi_keys/KEK.crt -k /var/lib/efi_keys/KEK.key dbx \"{dbx_esl_path}\" \"{dbx_auth_path}\"")
+					WriteEfiVar("dbx", ReadFile(dbx_auth_path, binary=True))
 
 	# Post Install Cleanup
-	RunCommand(f"rm -rf \"{temp_dir_path}\"")
+	shutil.rmtree(temp_dir_path, ignore_errors=True)
 	print("Successfully updated and installed new bootloader!")
 	return 0
 sys.exit(Main())
