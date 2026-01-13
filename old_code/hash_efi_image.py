@@ -1,9 +1,7 @@
 #!/bin/env python
 import os
 import subprocess
-import struct
-import pefile
-import hashlib
+import sys
 
 def WriteFile(filePath, contents, binary=False):
     filePath = os.path.realpath(os.path.expanduser(filePath))
@@ -32,9 +30,7 @@ def PrintWarning(message):
 def PrintError(message):
     print(f"\033[91mERROR: {message}\033[0m")
 
-def HashEFIImage(efi_image_path):
-    efi_image = ReadFile(efi_image_path, binary=True)
-
+def HashEFIImage(efi_image):
     pe = pefile.PE(data=efi_image, fast_load=True)
 
     hasher = hashlib.new("sha256")
@@ -64,20 +60,11 @@ def HashEFIImage(efi_image_path):
             hasher.update(b'\x00' * padding_len)
 
     return hasher.digest()
-def WriteESL(signature_data, esl_path):
-    print(signature_data.hex())
-    signature_type = bytes.fromhex("2616c4c14c509240aca941f936934328") # EFI_CERT_SHA256_GUID
-    signature_list_size = struct.pack("<I", 76) # SignatureHeaderSize + SignatureSize
-    signature_header_size = struct.pack("<I", 28) # sizeof(EFI_SIGNATURE_LIST)
-    signature_size = struct.pack("<I", 48) # sizeof(EFI_SIGNATURE_DATA) with 32 bytes for SignatureData
-    signature_owner = bytes.fromhex("042c7081cc157345b5d4c3a476b635dc") # EOS_UUID
-    esl_payload = signature_type + signature_list_size + signature_header_size + signature_size + signature_owner + signature_data
-    WriteFile(esl_path, esl_payload, binary=True)
 
 def Main():
-    oprom_dir_path = os.path.realpath("./oproms")
-    for efi_image_path in RunCommand(f"find \"{oprom_dir_path}\" -mindepth 1 -maxdepth 1 -type f -name \"*.efi\"", capture=True).splitlines():
-        efi_image_hash = HashEFIImage(efi_image_path)
-        esl_path = efi_image_path.removesuffix(".efi") + ".esl"
-        WriteESL(efi_image_hash, esl_path)
-Main()
+    if len(sys.argv) != 2:
+        print("USAGE: hash_efi_image /path/to/binary.efi")
+        return 1
+    print(f"{sys.argv[1]} -> {HashEFIImage(ReadFile(sys.argv[1], binary=True)).hex()}")
+    return 0
+sys.exit(Main())
