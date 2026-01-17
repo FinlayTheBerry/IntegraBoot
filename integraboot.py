@@ -193,11 +193,11 @@ def Main():
 
 	# Scanity Checks
 	DEPENDENCIES = [
-		("chattr", "base"),
 		("mkinitcpio", "base"),
+		("ukify", "systemd-ukify"),
+		("chattr", "base"),
 		("cryptsetup", "base"),
 		("filefrag", "base"),
-		("ukify", "systemd-ukify"),
 		("openssl", "base"),
 		("efibootmgr", "efibootmgr"),
 		("cert-to-efi-sig-list", "efitools"),

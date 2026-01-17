@@ -1,6 +1,6 @@
-Minifi with https://python-minifier.com/
+Minifi library source code with https://python-minifier.com/
 
-Minifier Settings:
+Use the following minifier settings:
 Combine Import statements: YES
 Remove Pass statements: YES
 Remove literal statements (docstrings): YES
@@ -20,5 +20,5 @@ Remove function return annotations: YES
 Remove function argument annotations: YES
 Remove class attribute annotations: YES
 
-place in 1
+Place minified source code in a.txt
 zstd a -o b --rm && base64 -w 0 b c && rm b && featherpad c && rm c
