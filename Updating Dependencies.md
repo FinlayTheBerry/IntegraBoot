@@ -20,5 +20,5 @@ Remove function return annotations: YES
 Remove function argument annotations: YES
 Remove class attribute annotations: YES
 
-Place minified source code in a.txt
-zstd a -o b --rm && base64 -w 0 b c && rm b && featherpad c && rm c
+Place minified source code into ./input.py then run the following:
+zstd --ultra -22 -c input.py | base64 -w 0 > output.zst.b64 && featherpad output.zst.b64 && rm output.zst.b64
