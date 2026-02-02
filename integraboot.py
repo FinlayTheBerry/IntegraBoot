@@ -189,7 +189,6 @@ def HashEFIImage(efi_image):
 			hasher.update(b'\x00' * padding_len)
 
 	return hasher.digest()
-
 def AddPESection(name, payload, pe):
     def align(val, alignment):
         return ((val + alignment - 1) // alignment) * alignment
@@ -264,7 +263,6 @@ def Main():
 	# Scanity Checks
 	DEPENDENCIES = [
 		("mkinitcpio", "base"),
-		("ukify", "systemd-ukify"),
 		("chattr", "base"),
 		("cryptsetup", "base"),
 		("filefrag", "base"),
