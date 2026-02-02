@@ -1,9 +1,6 @@
 #!/usr/bin/bash
 cd "$(dirname "$0")"
 
-# cd into the systemd source dir
-cd systemd
-
 # Create the build dir and cd into it
 mkdir -p build
 cd build
@@ -13,8 +10,8 @@ echo "Applying patches..."
 mkdir -p src
 mkdir -p src/version
 mkdir -p src/boot
-cp ../../patches/version.h src/version/version.h
-cp ../../patches/efi-config.h src/boot/efi-config.h
+cp ../patches/version.h src/version/version.h
+cp ../patches/efi-config.h src/boot/efi-config.h
 
 # Build source .c files into output object .o files
 echo "Building sources..."

@@ -2,7 +2,7 @@
 cd "$(dirname "$0")"
 
 # Remove old source if it exists
-rm -rf systemd
+rm -rf src tools
 
 # Download the latest source tarball from GitHub
 tarball_url="$(curl -s https://api.github.com/repos/systemd/systemd/releases/latest | jq -r ".tarball_url")"
@@ -136,6 +136,10 @@ for keeppath in "${keeplist[@]}"; do
 find systemd/ -type l -delete
 find systemd/ -type f "${findargs[@]}" -delete
 find systemd/ -depth -type d -delete 2>/dev/null
+
+mv systemd/tools tools
+mv systemd/src src
+rmdir systemd
 
 echo "Done!"
 exit 0
