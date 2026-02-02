@@ -1,0 +1,17 @@
+# To build without IntegraStub build scripts run
+meson setup build -Dmode=release -Doptimization=s -Dstrip=true -Dbootloader=enabled -Defi=true
+meson compile -C build linuxx64.efi.stub
+
+# To see which flags to pass into the meson build you can copy arch linux
+# https://gitlab.archlinux.org/archlinux/packaging/packages/systemd/-/blob/main/PKGBUILD?ref_type=heads
+
+# To see the build commands run
+meson setup build -Dmode=release -Doptimization=s -Dstrip=true -Dbootloader=enabled -Defi=true
+meson compile -C build linuxx64.efi.stub --verbose
+
+# To visualize dependencies use
+ninja -t graph src/boot/linuxx64.efi.stub | dot -Tpng -o build_graph.png && xdg-open build_graph.png
+
+# To get the list of all files to keep use the scripts and .c files from the graph above
+# Then to get the list of needed .h header files build again with -MMD to create .o.d dependency files
+# Finally use cat *.d to output all the needed .c and .h files required for the build.
