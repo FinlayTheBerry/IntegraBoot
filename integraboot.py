@@ -378,7 +378,7 @@ def Main():
 		swap_offset = RunCommand(f"filefrag /swapfile -v", capture=True).splitlines()[3].split(":")[2].partition(".")[0].strip()
 		cmdline = " ".join([ f"resume=UUID={root_uuid} resume_offset={swap_offset} hibernate.compressor=lz4", cmdline ])
 	efi_path = os.path.join(temp_dir_path, "epsilonos.efi")
-	efi_stub_path = "/usr/lib/systemd/boot/efi/linuxx64.efi.stub"
+	efi_stub_path = "/var/lib/integraboot/integrastub.efi"
 	pe = pefile.PE(efi_stub_path)
 	sections = [
 		(".osrel", "OSRelease".encode("utf-8")),
