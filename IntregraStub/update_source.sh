@@ -1,8 +1,15 @@
 #!/usr/bin/bash
 cd "$(dirname "$0")"
 
+# Confirm with the user that they want to destroy the contents of systemd
+read -p "The contents of ./systemd will be reset to systemd upstream. Are you sure? (y/N): " response
+if [[ ! "$response" =~ ^([yY]|[yY][eE][sS])$ ]]; then
+    echo "Aborting! Nothing changed."
+    exit 1
+fi
+
 # Remove old source if it exists
-rm -rf src tools
+rm -rf systemd
 
 # Download the latest source tarball from GitHub
 tarball_url="$(curl -s https://api.github.com/repos/systemd/systemd/releases/latest | jq -r ".tarball_url")"
@@ -20,6 +27,22 @@ rm systemd.tar.gz
 # Build the list of files to keep from the systemd source
 echo "Removing unused SystemD source files..."
 mapfile -t keeplist <<EOF
+LICENSE.GPL2
+LICENSE.LGPL2.1
+CITATION.cff
+LICENSES/murmurhash2-public-domain.txt
+LICENSES/alg-sha1-public-domain.txt
+LICENSES/LGPL-2.0-or-later.txt
+LICENSES/README.md
+LICENSES/MIT.txt
+LICENSES/CC0-1.0.txt
+LICENSES/MIT-0.txt
+LICENSES/BSD-2-Clause.txt
+LICENSES/Linux-syscall-note.txt
+LICENSES/lookup3-public-domain.txt
+LICENSES/OFL-1.1.txt
+LICENSES/BSD-3-Clause.txt
+tools/elf2efi.py
 src/boot/part-discovery.h
 src/boot/random-seed.h
 src/fundamental/unaligned-fundamental.h
@@ -123,7 +146,6 @@ src/boot/vmm.h
 src/boot/util.h
 src/boot/proto/security-arch.h
 src/boot/devicetree.c
-tools/elf2efi.py
 EOF
 
 # Build array of args to find command from the keep list
@@ -136,10 +158,6 @@ for keeppath in "${keeplist[@]}"; do
 find systemd/ -type l -delete
 find systemd/ -type f "${findargs[@]}" -delete
 find systemd/ -depth -type d -delete 2>/dev/null
-
-mv systemd/tools tools
-mv systemd/src src
-rmdir systemd
 
 echo "Done!"
 exit 0
