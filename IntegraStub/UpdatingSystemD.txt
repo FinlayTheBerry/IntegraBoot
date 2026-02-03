@@ -1,0 +1,38 @@
+# Updating SystemD
+This document outlines the procedure for updating IntegraStub when the upstream SystemDStub updates.
+
+# To clone the latest release of SystemD into ./systemd run
+tarball_url="$(curl -s https://api.github.com/repos/systemd/systemd/releases/latest | jq -r ".tarball_url")"
+curl -L "$tarball_url" -o systemd.tar.gz --progress-bar
+tar -xf systemd.tar.gz && mv systemd-systemd-* systemd
+rm systemd.tar.gz
+
+# To build SystemDStub normally run
+meson setup build -Dmode=release -Doptimization=s -Dstrip=true -Dbootloader=enabled -Defi=true
+meson compile -C build linuxx64.efi.stub
+
+# To see which flags to pass into the meson build you can copy arch linux
+https://gitlab.archlinux.org/archlinux/packaging/packages/systemd/-/blob/main/PKGBUILD?ref_type=heads
+
+# To see the build commands run
+meson compile -C build linuxx64.efi.stub --verbose
+
+# To visualize dependencies use
+ninja -t graph src/boot/linuxx64.efi.stub | dot -Tpng -o build_graph.png && xdg-open ./build_graph.png
+
+# To get the full list of dependency .c and .h files to make each .o file run
+meson setup build -Dmode=release -Doptimization=s -Dstrip=true -Dbootloader=enabled -Defi=true
+meson compile -C build linuxx64.efi.stub --verbose
+
+# Finally to get a list of all .o files and the dependencies needed to make them run
+find . -type f -name "*.o" | while read -r file; do ninja -t deps "$file" | sed "1d;\$d" | grep -v "/usr/"; done | sort -u
+# Don't forget that in addition to these LICENSE.GPL2 LICENSE.LGPL2.1 CITATION.cff and LICENSES/* all must stay
+
+# Then you can check generate diffs between SystemDStub and IntegraStub with
+find IntegraStub -type f | while read -r file; do
+    subpath="${file#IntegraStub/}"
+    newfile="systemd/$subpath"
+    if ! diff -q "$file" "$newfile" > /dev/null; then
+        diff -u "$file" "$newfile"
+    fi
+done
