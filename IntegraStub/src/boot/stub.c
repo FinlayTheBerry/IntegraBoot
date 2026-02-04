@@ -1220,13 +1220,13 @@ static void measure_profile(unsigned profile, int *parameters_measured) {
 static EFI_STATUS run(EFI_HANDLE image) {
         int sections_measured = -1, parameters_measured = -1, sysext_measured = -1, confext_measured = -1;
         _cleanup_(devicetree_cleanup) struct devicetree_state dt_state = {};
-        _cleanup_free_ char16_t *cmdline = NULL, *cmdline_addons = NULL;
+        _cleanup_free_ char16_t *cmdline = NULL; // , *cmdline_addons = NULL;
         _cleanup_(initrds_free) struct iovec initrds[_INITRD_MAX] = {};
         PeSectionVector sections[ELEMENTSOF(unified_sections)] = {};
         EFI_LOADED_IMAGE_PROTOCOL *loaded_image;
         _cleanup_free_ char *uname = NULL;
-        NamedAddon *dt_addons = NULL, *initrd_addons = NULL, *ucode_addons = NULL;
-        size_t n_dt_addons = 0, n_initrd_addons = 0, n_ucode_addons = 0;
+        // NamedAddon *dt_addons = NULL, *initrd_addons = NULL, *ucode_addons = NULL;
+        // size_t n_dt_addons = 0, n_initrd_addons = 0, n_ucode_addons = 0;
         _cleanup_free_ struct iovec *all_initrds = NULL;
         size_t n_all_initrds = 0;
         unsigned profile = 0;
@@ -1238,7 +1238,7 @@ static EFI_STATUS run(EFI_HANDLE image) {
 
         /* Pick up the arguments passed to us, split out the prefixing profile parameter, and return the rest
          * as potential command line to use. */
-        process_arguments(image, loaded_image, &profile, &cmdline);
+        // process_arguments(image, loaded_image, &profile, &cmdline);
 
         /* Find the sections we want to operate on, both the basic ones, and the one appropriate for the
          * selected profile. */
@@ -1254,31 +1254,33 @@ static EFI_STATUS run(EFI_HANDLE image) {
 
         refresh_random_seed(loaded_image);
 
+        cmdline = mangle_stub_cmdline(pe_section_to_str16(loaded_image, sections + UNIFIED_SECTION_CMDLINE));
+
         uname = pe_section_to_str8(loaded_image, sections + UNIFIED_SECTION_UNAME);
 
         /* Let's now check if we actually want to use the command line, measure it if it was passed in. */
-        settle_command_line(loaded_image, sections, &cmdline, &parameters_measured);
+        // settle_command_line(loaded_image, sections, &cmdline, &parameters_measured);
 
         /* Now that we have the UKI sections loaded, also load global first and then local (per-UKI)
          * addons. The data is loaded at once, and then used later. */
-        CLEANUP_ARRAY(dt_addons, n_dt_addons, named_addon_free_many);
-        CLEANUP_ARRAY(initrd_addons, n_initrd_addons, named_addon_free_many);
-        CLEANUP_ARRAY(ucode_addons, n_ucode_addons, named_addon_free_many);
-        load_all_addons(image, loaded_image, uname, &cmdline_addons, &dt_addons, &n_dt_addons, &initrd_addons, &n_initrd_addons, &ucode_addons, &n_ucode_addons);
+        // CLEANUP_ARRAY(dt_addons, n_dt_addons, named_addon_free_many);
+        // CLEANUP_ARRAY(initrd_addons, n_initrd_addons, named_addon_free_many);
+        // CLEANUP_ARRAY(ucode_addons, n_ucode_addons, named_addon_free_many);
+        // load_all_addons(image, loaded_image, uname, &cmdline_addons, &dt_addons, &n_dt_addons, &initrd_addons, &n_initrd_addons, &ucode_addons, &n_ucode_addons);
 
         /* If we have any extra command line to add via PE addons, load them now and append, and measure the
          * additions together, after the embedded options, but before the smbios ones, so that the order is
          * reversed from "most hardcoded" to "most dynamic". The global addons are loaded first, and the
          * image-specific ones later, for the same reason. */
-        cmdline_append_and_measure_addons(cmdline_addons, &cmdline, &parameters_measured);
-        cmdline_append_and_measure_smbios(&cmdline, &parameters_measured);
+        // cmdline_append_and_measure_addons(cmdline_addons, &cmdline, &parameters_measured);
+        // cmdline_append_and_measure_smbios(&cmdline, &parameters_measured);
 
         export_common_variables(loaded_image);
         export_stub_variables(loaded_image, profile);
 
         /* First load the base device tree, then fix it up using addons - global first, then per-UKI. */
         install_embedded_devicetree(loaded_image, sections, &dt_state);
-        install_addon_devicetrees(&dt_state, dt_addons, n_dt_addons, &parameters_measured);
+        // install_addon_devicetrees(&dt_state, dt_addons, n_dt_addons, &parameters_measured);
 
         /* Generate & find all initrds */
         generate_sidecar_initrds(loaded_image, initrds, &parameters_measured, &sysext_measured, &confext_measured);
@@ -1293,9 +1295,9 @@ static EFI_STATUS run(EFI_HANDLE image) {
          * 3. UKI initrd
          * 4. Generated initrds
          * 5. initrd addons */
-        measure_and_append_ucode_addons(&all_initrds, &n_all_initrds, ucode_addons, n_ucode_addons, &parameters_measured);
+        // measure_and_append_ucode_addons(&all_initrds, &n_all_initrds, ucode_addons, n_ucode_addons, &parameters_measured);
         extend_initrds(initrds, &all_initrds, &n_all_initrds);
-        measure_and_append_initrd_addons(&all_initrds, &n_all_initrds, initrd_addons, n_initrd_addons, &parameters_measured);
+        // measure_and_append_initrd_addons(&all_initrds, &n_all_initrds, initrd_addons, n_initrd_addons, &parameters_measured);
 
         /* Export variables indicating what we measured */
         export_pcr_variables(sections_measured, parameters_measured, sysext_measured, confext_measured);
