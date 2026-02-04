@@ -2,6 +2,7 @@
 This document outlines the procedure for updating IntegraStub when the upstream SystemDStub updates.
 
 # To clone the latest release of SystemD into ./systemd run
+rm -rf systemd
 tarball_url="$(curl -s https://api.github.com/repos/systemd/systemd/releases/latest | jq -r ".tarball_url")"
 curl -L "$tarball_url" -o systemd.tar.gz --progress-bar
 tar -xf systemd.tar.gz && mv systemd-systemd-* systemd
@@ -28,8 +29,19 @@ meson compile -C build linuxx64.efi.stub --verbose
 find . -type f -name "*.o" | while read -r file; do ninja -t deps "$file" | sed "1d;\$d" | grep -v "/usr/"; done | sort -u
 # Don't forget that in addition to these LICENSE.GPL2 LICENSE.LGPL2.1 CITATION.cff and LICENSES/* all must stay
 
-# If you copy the original src directory into original_src then you can print all the differences between SystemDStub and IntegraStub with
-find original_src -type f | while read -r file; do
-    newfile="${file/original_src/src}"
-    diff -u "$file" "$newfile"
-done
+# To update the original_src directory run the following
+rm -rf original_systemd
+tarball_url="$(curl -s https://api.github.com/repos/systemd/systemd/releases/latest | jq -r ".tarball_url")"
+curl -L "$tarball_url" -o systemd.tar.gz --progress-bar
+tar -xf systemd.tar.gz && mv systemd-systemd-* original_systemd
+rm systemd.tar.gz
+mv original_systemd/src original_src
+rm -r original_systemd
+find original_src/ -mindepth 1 -maxdepth 1 ! -name "boot" ! -name "fundamental" -exec rm -r {} \;
+rm -r original_src/fundamental/meson.build original_src/fundamental/strv-fundamental.h original_src/boot/addon.c original_src/boot/bcd.c original_src/boot/bcd.h original_src/boot/boot.c original_src/boot/fuzz-bcd.c original_src/boot/fuzz-efi-osrel.c original_src/boot/fuzz-efi-printf.c original_src/boot/fuzz-efi-string.c original_src/boot/generate-hwids-section.py original_src/boot/hwids original_src/boot/line-edit.c original_src/boot/line-edit.h original_src/boot/meson.build original_src/boot/test-bcd.c original_src/boot/test-chid-match.c original_src/boot/test-efi-string.c original_src/boot/ubsan.c original_src/boot/UEFI_SECURITY.md
+
+# Then you can print all the differences between SystemDStub and IntegraStub with
+diff -r src/ original_src/
+
+# You can view the diffs of a specific file with
+code --diff src/boot/stub.c original_src/boot/stub.c

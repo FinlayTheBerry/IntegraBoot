@@ -1255,7 +1255,6 @@ static EFI_STATUS run(EFI_HANDLE image) {
         refresh_random_seed(loaded_image);
 
         cmdline = mangle_stub_cmdline(pe_section_to_str16(loaded_image, sections + UNIFIED_SECTION_CMDLINE));
-
         uname = pe_section_to_str8(loaded_image, sections + UNIFIED_SECTION_UNAME);
 
         /* Let's now check if we actually want to use the command line, measure it if it was passed in. */
