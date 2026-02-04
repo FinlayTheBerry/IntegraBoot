@@ -31,6 +31,7 @@ find . -type f -name "*.o" | while read -r file; do ninja -t deps "$file" | sed 
 
 # To update the original_src directory run the following
 rm -rf original_systemd
+rm -rf original_src
 tarball_url="$(curl -s https://api.github.com/repos/systemd/systemd/releases/latest | jq -r ".tarball_url")"
 curl -L "$tarball_url" -o systemd.tar.gz --progress-bar
 tar -xf systemd.tar.gz && mv systemd-systemd-* original_systemd
