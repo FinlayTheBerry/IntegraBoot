@@ -21,4 +21,8 @@ Remove function argument annotations: YES
 Remove class attribute annotations: YES
 
 Place minified source code into ./input.py then run the following:
-zstd --ultra -22 -c input.py | base64 -w 0 > output.zst.b64 && featherpad output.zst.b64 && rm output.zst.b64
+zstd --ultra -22 -c input.py | base64 -w 0 > output.zst.b64 && rm input.py && featherpad output.zst.b64 && rm output.zst.b64
+
+Additionally pefile.py must be patched in the following ways:
+Remove "import ordlookup"
+IntegraBoot never invokes the parts of pefile.py that call ordlookup.ordLookup so it's safe to remove this import.
