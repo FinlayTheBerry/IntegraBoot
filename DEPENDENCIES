@@ -1,4 +1,26 @@
-Minifi library source code with https://python-minifier.com/
+# integraboot.py
+mkinitcpio - command
+chattr - command
+cryptsetup - command
+filefrag - command
+openssl - command
+efibootmgr - command
+cert-to-efi-sig-list - command
+sign-efi-sig-list - command
+eventlog.py - python module - embedded as compressed base64
+pefile.py - python module - embedded as compressed base64
+
+
+
+# dump_oprom_hashes.py
+lspci - command - optional
+EfiCompressor.so - python module - CPython compiled library
+pefile.py - python module - embedded as compressed base64
+
+
+
+# How to update embedded python modules
+Minifi the source file with https://python-minifier.com/
 
 Use the following minifier settings:
 Combine Import statements: YES
@@ -20,8 +42,8 @@ Remove function return annotations: YES
 Remove function argument annotations: YES
 Remove class attribute annotations: YES
 
-Place minified source code into ./input.py then run the following:
-zstd --ultra -22 -c input.py | base64 -w 0 > output.zst.b64 && rm input.py && featherpad output.zst.b64 && rm output.zst.b64
+Run the following and input raw source to get compressed base64 output:
+featherpad /tmp/input.py && zstd --ultra -22 -c /tmp/input.py | base64 -w 0 > /tmp/output.zst.b64 && rm /tmp/input.py && featherpad /tmp/output.zst.b64 && rm /tmp/output.zst.b64
 
 Additionally pefile.py must be patched in the following ways:
 Remove "import ordlookup"

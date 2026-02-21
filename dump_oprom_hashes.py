@@ -203,7 +203,11 @@ def Main():
         PrintError(f"Root is required to run this script. Try sudo dump_oprom_hashes.")
         return 1
     
-    for rom_path in RunCommand("find -L /sys/bus/pci/devices/ -mindepth 2 -maxdepth 2 -type f -name rom", capture=True).splitlines():
+    for pci_device_id in os.listdir("/sys/bus/pci/devices/"):
+        rom_path = os.path.join("/sys/bus/pci/devices/", pci_device_id, "rom")
+        if not os.path.exists(rom_path):
+            continue
+
         WriteFile(rom_path, "1")
         try:
             oprom = ReadFile(rom_path, binary=True)
@@ -223,7 +227,7 @@ def Main():
         efi_image_hash = HashEFIImage(efi_image)
 
         device_id = rom_path.removeprefix("/sys/bus/pci/devices/").removesuffix("/rom")
-        print(f"{RunCommand(f"lspci -s {device_id}", capture=True)}")
+        RunCommand(f"lspci -s {device_id}", echo=True, check=False)
         print(f"# {efi_image_hash.hex()}")
     return 0
 Main()
