@@ -213,7 +213,7 @@ def Main():
             oprom = ReadFile(rom_path, binary=True)
         except OSError as ex:
             if ex.errno == 5:
-                print("Option ROM returned an IO error. This usually happens when the PCI device doesn't actually have an option ROM and is safe to ignore.")
+                PrintWarning("Option ROM returned an IO error. This usually happens when the PCI device doesn't actually have an option ROM and is safe to ignore.")
                 continue
             else:
                 raise
@@ -226,8 +226,6 @@ def Main():
 
         efi_image_hash = HashEFIImage(efi_image)
 
-        device_id = rom_path.removeprefix("/sys/bus/pci/devices/").removesuffix("/rom")
-        RunCommand(f"lspci -s {device_id}", echo=True, check=False)
         print(f"# {efi_image_hash.hex()}")
     return 0
 Main()

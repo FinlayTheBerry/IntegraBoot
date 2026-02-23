@@ -289,7 +289,7 @@ def Main():
 		return 1
 	for dep, pac in DEPENDENCIES:
 		if shutil.which(dep) == None:
-			PrintError(f"Unable to locate required dependency {dep}. Try pacman -Syu {pac}.")
+			PrintError(f"Unable to locate required dependency {dep}. Try sudo pacman -S {pac}.")
 			return 1
 
 	# State flags that determine if certain behavior should be enabled

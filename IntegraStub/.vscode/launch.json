@@ -1,0 +1,19 @@
+{
+    "configurations": [
+        {
+            "name": "Debug IntegraBoot in QEMU",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/obj/debug/integrastub.elf",
+            "cwd": "${workspaceRoot}",
+            "miDebuggerServerAddress": "localhost:1234",
+            "preLaunchTask": "debug-integrastub-qemu",
+            "postRemoteConnectCommands": [
+                {
+                    "text": "source ${workspaceFolder}/obj/debug_env/integrastub.gdb",
+                    "ignoreFailures": false
+                }
+            ]
+        }
+    ]
+}

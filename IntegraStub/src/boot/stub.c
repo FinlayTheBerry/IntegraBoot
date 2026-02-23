@@ -1326,4 +1326,8 @@ static EFI_STATUS run(EFI_HANDLE image) {
         return err;
 }
 
-DEFINE_EFI_MAIN_FUNCTION(run, "systemd-stub", /* wait_for_debugger= */ false);
+#ifdef EFI_DEBUG
+DEFINE_EFI_MAIN_FUNCTION(run, "integrastub", /* wait_for_debugger= */ true);
+#else
+DEFINE_EFI_MAIN_FUNCTION(run, "integrastub", /* wait_for_debugger= */ false);
+#endif
