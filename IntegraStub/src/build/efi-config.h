@@ -9,7 +9,7 @@
 #define HAVE_WARNING_ZERO_AS_NULL_POINTER_CONSTANT 1
 #define HAVE_WARNING_ZERO_LENGTH_BOUNDS 1
 #define PROJECT_URL "https://systemd.io/"
-#define PROJECT_VERSION "259"
+#define PROJECT_VERSION "260"
 #define RELATIVE_SOURCE_PATH ".."
 #define SBAT_DISTRO "EpsilonOS"
 #define SBAT_DISTRO_GENERATION 1
@@ -18,4 +18,4 @@
 #define SBAT_DISTRO_URL "https://epsilonos.org/"
 #define SBAT_DISTRO_VERSION GIT_VERSION
 #define SBAT_PROJECT "systemd"
-#define VERSION_TAG "259"
+#define VERSION_TAG "260"

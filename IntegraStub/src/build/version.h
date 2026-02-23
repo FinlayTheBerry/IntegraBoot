@@ -8,4 +8,4 @@
  *   pkgconfig files and version information written to binary files.
  */
 
-#define GIT_VERSION VERSION_TAG "259"
+#define GIT_VERSION VERSION_TAG "260"

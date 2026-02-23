@@ -1327,7 +1327,7 @@ static EFI_STATUS run(EFI_HANDLE image) {
 }
 
 #ifdef EFI_DEBUG
-DEFINE_EFI_MAIN_FUNCTION(run, "integrastub", /* wait_for_debugger= */ true);
+DEFINE_EFI_MAIN_FUNCTION(run, "integraboot", /* wait_for_debugger= */ true);
 #else
-DEFINE_EFI_MAIN_FUNCTION(run, "integrastub", /* wait_for_debugger= */ false);
+DEFINE_EFI_MAIN_FUNCTION(run, "integraboot", /* wait_for_debugger= */ false);
 #endif

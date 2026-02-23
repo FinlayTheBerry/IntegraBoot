@@ -2,9 +2,15 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "debug-integrastub-qemu",
+            "label": "debug-integraboot-qemu",
             "type": "shell",
-            "command": "${workspaceFolder}/.vscode/debug-integrastub-qemu.sh",
+            "command": "${workspaceFolder}/tools/debug-integraboot-qemu.sh",
+            "dependsOn": [ "make-debug" ]
+        },
+        {
+            "label": "make-debug",
+            "type": "shell",
+            "command": "cd ${workspaceFolder} && make debug",
         }
     ]
 }

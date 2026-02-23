@@ -5,39 +5,52 @@ LDFLAGS := -Wl,--as-needed -Wl,--no-undefined -pie -fstack-protector -Wl,--start
 E2EFLAGS := --version-major=260 --version-minor=0 --efi-major=1 --efi-minor=1 --subsystem=10 --minimum-sections=120 --copy-sections=.sbat,.sdmagic,.osrel
 INCLUDES := -Isrc/build -Isrc/fundamental -Isrc/boot -include efi-config.h
 SRCS := $(shell find src -type f -name "*.c")
-RELEASE_OBJS := $(patsubst src/%.c, obj/release/%.o, $(SRCS))
-DEBUG_OBJS := $(patsubst src/%.c, obj/debug/%.o, $(SRCS))
+RELEASE_OBJS := $(patsubst src/%.c, build/release_obj/%.o, $(SRCS))
+DEBUG_OBJS := $(patsubst src/%.c, build/debug_obj/%.o, $(SRCS))
 
-release: ./bin/integrastub.efi
-./bin/integrastub.efi: ./obj/release/integrastub.elf ./Makefile
-	@mkdir -p ./bin
+release: ./build/integrastub.efi
+debug: ./build/debug_integraboot.efi
+
+./build/debug_integraboot.efi: ./build/debug_integrastub.efi ./build/mini_initrd.img ./Makefile
+	ukify build --linux "$(shell find /usr/lib/modules/*/vmlinuz)" --initrd ./build/mini_initrd.img --stub ./build/debug_integrastub.efi --output $@
+
+./build/mini_initrd.img: ./Makefile
+	rm -rf ./build/mini_initrd
+	mkdir -p ./build/mini_initrd
+	printf "#!/ash\necho \"Mini InitRD booted successfully!\"\nwhile [ 1==1 ]; do :; done" > "./build/mini_initrd/init"
+	chmod 755 ./build/mini_initrd/init
+	cp "$(shell which busybox)" ./build/mini_initrd/busybox
+	ln -s busybox ./build/mini_initrd/ash
+	sh -c 'cd ./build/mini_initrd && find . | cpio -ov --format=newc --owner=+0:+0 --file=../mini_initrd.img'
+
+./build/integrastub.efi: ./build/integrastub.elf ./Makefile
+	@mkdir -p ./build
 	tools/elf2efi.py $(E2EFLAGS) $< $@
 
-debug: ./bin/debug_integrastub.efi
-./bin/debug_integrastub.efi: ./obj/debug/integrastub.elf ./Makefile
-	@mkdir -p ./bin
-	tools/elf2efi.py $(E2EFLAGS) $< $@
+./build/debug_integrastub.efi: ./build/debug_integrastub.elf ./Makefile
+	@mkdir -p ./build
+	./tools/elf2efi.py $(E2EFLAGS) $< $@
 
-./obj/release/integrastub.elf: $(RELEASE_OBJS) ./Makefile
-	@mkdir -p ./obj/release
+./build/integrastub.elf: $(RELEASE_OBJS) ./Makefile
+	@mkdir -p ./build
 	$(CC) $(LDFLAGS) -o $@ $(RELEASE_OBJS)
 
-./obj/debug/integrastub.elf: $(DEBUG_OBJS) ./Makefile
-	@mkdir -p ./obj/debug
+./build/debug_integrastub.elf: $(DEBUG_OBJS) ./Makefile
+	@mkdir -p ./build
 	$(CC) $(LDFLAGS) -o $@ $(DEBUG_OBJS)
 
-./obj/release/%.o: ./src/%.c ./Makefile
+./build/release_obj/%.o: ./src/%.c ./Makefile
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(RELEASE_CFLAGS) $(INCLUDES) -c $< -o $@
 
-./obj/debug/%.o: ./src/%.c ./Makefile
+./build/debug_obj/%.o: ./src/%.c ./Makefile
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(DEBUG_CFLAGS) $(INCLUDES) -c $< -o $@
 
-install: ./obj/integrastub.elf ./Makefile
-	install -o 0 -g 0 -m600 -D ./bin/integrastub.efi /var/lib/integraboot/integrastub.efi
+install: ./build/integrastub.efi ./Makefile
+	install -o 0 -g 0 -m600 -D ./build/integrastub.efi /var/lib/integraboot/integrastub.efi
 
 clean:
-	rm -rf ./bin ./obj
+	rm -rf ./build
 
 .PHONY: release debug clean
