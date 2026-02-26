@@ -9,6 +9,7 @@ tar -xf systemd.tar.gz && mv systemd-systemd-* systemd
 rm systemd.tar.gz
 
 # To build SystemDStub normally run
+meson setup build -Dmode=developer -Doptimization=0 -Dbootloader=enabled -Defi=true
 meson setup build -Dmode=release -Doptimization=s -Dstrip=true -Dbootloader=enabled -Defi=true
 meson compile -C build linuxx64.efi.stub
 

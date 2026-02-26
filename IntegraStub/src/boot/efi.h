@@ -125,6 +125,7 @@ typedef uint64_t EFI_PHYSICAL_ADDRESS;
 #define EFI_COMPROMISED_DATA     EFIERR(33)
 #define EFI_IP_ADDRESS_CONFLICT  EFIERR(34)
 #define EFI_HTTP_ERROR           EFIERR(35)
+#define EFI_ERROR_INVALID        EFIERR(-1)
 
 /* These allow MAKE_GUID_PTR() to work without requiring an extra _GUID in the passed name. We want to
  * keep the GUID definitions in line with the UEFI spec. */

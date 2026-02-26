@@ -12,16 +12,16 @@ release: ./build/integrastub.efi
 debug: ./build/debug_integraboot.efi
 
 ./build/debug_integraboot.efi: ./build/debug_integrastub.efi ./build/mini_initrd.img ./Makefile
-	ukify build --linux "$(shell find /usr/lib/modules/*/vmlinuz)" --initrd ./build/mini_initrd.img --stub ./build/debug_integrastub.efi --output $@
+	ukify build --linux "$(shell find /usr/lib/modules/*/vmlinuz)" --initrd ./build/mini_initrd.img --splash ./src/testing_splash.bmp --stub ./build/debug_integrastub.efi --output $@
 
 ./build/mini_initrd.img: ./Makefile
 	rm -rf ./build/mini_initrd
 	mkdir -p ./build/mini_initrd
-	printf "#!/ash\necho \"Mini InitRD booted successfully!\"\nwhile [ 1==1 ]; do :; done" > "./build/mini_initrd/init"
+	printf "#!/ash\nfind /\necho \"Mini InitRD booted successfully!\"\nash" > "./build/mini_initrd/init"
 	chmod 755 ./build/mini_initrd/init
 	cp "$(shell which busybox)" ./build/mini_initrd/busybox
 	ln -s busybox ./build/mini_initrd/ash
-	sh -c 'cd ./build/mini_initrd && find . | cpio -ov --format=newc --owner=+0:+0 --file=../mini_initrd.img'
+	sh -c 'cd ./build/mini_initrd && find . -mindepth 1 | cpio -ov --format=newc --owner=+0:+0 --file=../mini_initrd.img'
 
 ./build/integrastub.efi: ./build/integrastub.elf ./Makefile
 	@mkdir -p ./build
