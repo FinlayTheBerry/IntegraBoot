@@ -1,0 +1,25 @@
+# Maintainer: Finlay Christ <finlaytheberry@gmail.com>
+pkgname=integraboot
+pkgver=0.0.2
+pkgrel=0
+pkgdesc="A systemdstub based UKI bootloader for Linux with secure boot support."
+arch=('x86_64')
+url="https://github.com/FinlayTheBerry/IntegraBoot"
+license=('Apache')
+depends=('python' 'efibootmgr' 'efitools')
+provides=('integraboot')
+conflicts=('integraboot')
+
+source=(
+  "integraboot.py::https://github.com/FinlayTheBerry/IntegraBoot/releases/latest/download/integraboot.py"
+  "integrastub.efi::https://github.com/FinlayTheBerry/IntegraBoot/releases/latest/download/integrastub.efi"
+)
+
+sha256sums=('257ae61cae9063cb5cb4b508c4d860851dd48a3315960fb0c958c1e9ef8b6ac0'
+            '3b6f5fde276770afc74a42d1f9e101622672ba2db1cb32783951c8d094ead9c9')
+
+package() {
+  install -Dm755 "${srcdir}/integraboot.py" "${pkgdir}/usr/bin/integraboot"
+  install -dm700 "${pkgdir}/var/lib/integraboot"
+  install -Dm400 "${srcdir}/integrastub.efi" "${pkgdir}/var/lib/integraboot/integrastub.efi"
+}
