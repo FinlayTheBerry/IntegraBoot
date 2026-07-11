@@ -1,5 +1,5 @@
-# Maintainer: Finlay Christ <finlaytheberry@gmail.com>
-pkgname=integraboot
+# Maintainer: Jacobi Aarons Christ <finlaytheberry@gmail.com>
+pkgname=integraboot-bin
 pkgver=0.0.2
 pkgrel=0
 pkgdesc="A systemdstub based UKI bootloader for Linux with secure boot support."

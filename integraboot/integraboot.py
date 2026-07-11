@@ -349,7 +349,7 @@ def Main():
 		f"MODULES=()",
 		f"BINARIES=()",
 		f"FILES=()",
-		f"HOOKS=({"" if in_chroot else "autodetect"} base udev microcode keyboard keymap {"numlock" if mkinitcpio_numlock_installed else ""} block encrypt resume filesystems)",
+		f"HOOKS=({"" if in_chroot and False else "autodetect"} base udev microcode keyboard keymap {"numlock" if mkinitcpio_numlock_installed else ""} block encrypt resume filesystems)",
 		f"COMPRESSION=\"cat\"",
 		f"COMPRESSION_OPTIONS=()",
 	]])
@@ -390,7 +390,7 @@ def Main():
 	for section in sections:
 		pe = AddPESection(section[0], section[1], pe)
 	pe.write(filename=efi_path)
-	os.unlink(cpio_path)
+	# os.unlink(cpio_path)
 
 	# Install uki to boot partition
 	# TODO Maybe there is a less invastive way to install without deleting existing bootloaders.
@@ -547,7 +547,7 @@ def Main():
 					WriteEfiVar("dbx", ReadFile(dbx_auth_path, binary=True))
 
 	# Post Install Cleanup
-	shutil.rmtree(temp_dir_path, ignore_errors=True)
+	# shutil.rmtree(temp_dir_path, ignore_errors=True)
 	print("Successfully updated and installed new bootloader!")
 	return 0
 sys.exit(Main())
