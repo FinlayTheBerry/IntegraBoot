@@ -3,13 +3,10 @@
 import subprocess
 import os
 import sys
-import struct
-import shutil
 import compression.zstd as zstd
 import hashlib
 import base64
 import types
-import uuid
 
 # region EOS Script Helpers
 def WriteFile(filePath, contents, binary=False):

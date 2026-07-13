@@ -349,7 +349,7 @@ def Main():
 		f"MODULES=()",
 		f"BINARIES=()",
 		f"FILES=()",
-		f"HOOKS=({"" if in_chroot and False else "autodetect"} base udev microcode keyboard keymap {"numlock" if mkinitcpio_numlock_installed else ""} block encrypt resume filesystems)",
+		f"HOOKS=({"" if in_chroot and False else "autodetect"} base udev microcode keyboard keymap {"numlock" if mkinitcpio_numlock_installed else ""} block one_time_unlock encrypt resume filesystems)",
 		f"COMPRESSION=\"cat\"",
 		f"COMPRESSION_OPTIONS=()",
 	]])
